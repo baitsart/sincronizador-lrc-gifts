@@ -131,7 +131,7 @@ HTML_PAGE = """<!DOCTYPE html>
       pending = splitLines(currentSong.lyrics || "");
       done = [];
       if (title) {
-        done.push({ seconds: 1.0, stamp: "[00:01:00]", text: `Título de la canción: ${title}` });
+        done.push({ seconds: 1.0, stamp: `[${formatLrcTime(1.0)}]`", text: `Título de la canción: ${title}` });
       }
 
       const yt = (currentSong.link_youtube || "").trim();
@@ -269,11 +269,6 @@ HTML_PAGE = """<!DOCTYPE html>
       .catch(err => { statusEl.textContent = "No se pudo cargar /api/songs: " + err; });
   </script>
 </body>
-</html>
-"""
-
-HTML_PAGE = """<!DOCTYPE html>
-...
 </html>
 """
 
