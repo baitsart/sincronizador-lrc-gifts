@@ -131,7 +131,7 @@ HTML_PAGE = """<!DOCTYPE html>
       pending = splitLines(currentSong.lyrics || "");
       done = [];
       if (title) {
-        done.push({ seconds: 1.0, stamp: `[${formatLrcTime(1.0)}]`", text: `Título de la canción: ${title}` });
+        done.push({ seconds: 1.0, stamp: `[${formatLrcTime(1.0)}]`, text: `Título de la canción: ${title}` });
       }
 
       const yt = (currentSong.link_youtube || "").trim();
