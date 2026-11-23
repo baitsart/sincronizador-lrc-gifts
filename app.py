@@ -24,7 +24,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sincronizador LRC — Gifts</title>
+  <title>Lyrics Sync Para Prem</title>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <style>
     body { font-family: system-ui, sans-serif; margin: 16px; background: #141619; color: #eef1f4; }
@@ -43,6 +43,9 @@ HTML_PAGE = """<!DOCTYPE html>
     .status { font-size: 0.9rem; color: #adb5bd; }
     @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
   </style>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <meta name="theme-color" content="#141619" />
 </head>
 <body>
   <div class="row">
@@ -90,10 +93,13 @@ HTML_PAGE = """<!DOCTYPE html>
     const statusEl = document.getElementById("status");
 
     function formatLrcTime(sec) {
-      const s = Math.max(0, Number(sec) || 0);
-      const mins = Math.floor(s / 60);
-      const rem = s % 60;
-      return `${String(mins).padStart(2, "0")}:${rem.toFixed(2).padStart(5, "0")}`;
+      let totalCentis = Math.max(0, Math.round((Number(sec) || 0) * 100));
+      const mins = Math.floor(totalCentis / 6000);
+      totalCentis %= 6000;
+      const secs = Math.floor(totalCentis / 100);
+      const centis = totalCentis % 100;
+
+      return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${String(centis).padStart(2, "0")}`;
     }
 
     function splitLines(raw) {
@@ -266,6 +272,34 @@ HTML_PAGE = """<!DOCTYPE html>
 </html>
 """
 
+HTML_PAGE = """<!DOCTYPE html>
+...
+</html>
+"""
+
+MANIFEST_JSON = json.dumps({
+    "name": "Lyrics Sync Para Prem",
+    "short_name": "Lyrics Sync",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#141619",
+    "theme_color": "#141619",
+    "icons": [
+        {
+            "src": "/icon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        }
+    ]
+}, ensure_ascii=False)
+
+ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="24" fill="#1f4e78"/>
+  <circle cx="64" cy="64" r="36" fill="none" stroke="#8ce99a" stroke-width="8"/>
+  <polygon points="56,46 84,64 56,82" fill="#eef1f4"/>
+</svg>"""
+
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -288,6 +322,24 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(songs, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if parsed.path == "/manifest.json":
+            body = MANIFEST_JSON.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/manifest+json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if parsed.path == "/icon.svg":
+            body = ICON_SVG.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
