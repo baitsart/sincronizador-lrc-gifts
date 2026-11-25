@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import json
 import os
-import re
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,10 +11,25 @@ USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 
 
 def find_json_file():
-    for name in ("gifts_album_yt.json", "gifts_album.json"):
-        p = os.path.join(BASE_DIR, name)
-        if os.path.isfile(p):
-            return p
+    search_dirs = [
+        BASE_DIR,
+        os.getcwd(),
+        os.path.expanduser("~"),
+        os.path.expanduser("~/Descargas"),
+        os.path.expanduser("~/Downloads"),
+        os.path.expanduser("~/Música"),
+        os.path.expanduser("~/Music"),
+    ]
+    seen = set()
+    for d in search_dirs:
+        norm = os.path.abspath(d)
+        if norm in seen or not os.path.isdir(norm):
+            continue
+        seen.add(norm)
+        for name in ("gifts_album_yt.json", "gifts_album.json"):
+            p = os.path.join(norm, name)
+            if os.path.isfile(p):
+                return p
     return None
 
 
@@ -41,6 +55,11 @@ HTML_PAGE = """<!DOCTYPE html>
     .done-item.selected { background: #2b593f; }
     .stamp { font-family: monospace; color: #8ce99a; white-space: nowrap; }
     .status { font-size: 0.9rem; color: #adb5bd; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 999; }
+    .modal-backdrop.open { display: flex; }
+    .modal-card { width: 100%; max-width: 680px; background: #191c20; border: 1px solid #343a40; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .modal-card textarea { width: 100%; height: 300px; background: #141619; color: #eef1f4; border: 1px solid #343a40; border-radius: 6px; padding: 10px; font-family: inherit; font-size: 0.95rem; resize: vertical; box-sizing: border-box; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
     @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
   </style>
   <link rel="manifest" href="/manifest.json" />
@@ -62,6 +81,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <button onclick="adjustTime(+0.50)">+0.50s ⏩</button>
     <button onclick="stampLine()">⏱ Marcar frase (Enter)</button>
     <button onclick="undoLast()">↩ Deshacer última</button>
+    <button onclick="openEditModal()">✏️ Editar entrada</button>
     <button onclick="downloadLrc()">💾 Descargar .lrc</button>
   </div>
 
@@ -79,10 +99,22 @@ HTML_PAGE = """<!DOCTYPE html>
   <div id="status" class="status">Cargando canciones...</div>
   <audio id="audioEl"></audio>
 
+  <div id="editModal" class="modal-backdrop">
+    <div class="modal-card">
+      <div style="font-weight:bold;">Editar letra de la entrada completa</div>
+      <textarea id="editTextarea" placeholder="Una línea por frase..."></textarea>
+      <div class="modal-actions">
+        <button onclick="closeEditModal()">Cancelar</button>
+        <button onclick="saveEditModal()">Guardar entrada</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let songs = [];
     let currentSong = null;
     let pending = [];
+    let activePendingIdx = 0;
     let done = [];
     let selectedDone = null;
     let hls = null;
@@ -91,6 +123,8 @@ HTML_PAGE = """<!DOCTYPE html>
     const songSelect = document.getElementById("songSelect");
     const clockEl = document.getElementById("clock");
     const statusEl = document.getElementById("status");
+    const editModal = document.getElementById("editModal");
+    const editTextarea = document.getElementById("editTextarea");
 
     function formatLrcTime(sec) {
       let totalCentis = Math.max(0, Math.round((Number(sec) || 0) * 100));
@@ -120,24 +154,30 @@ HTML_PAGE = """<!DOCTYPE html>
       clockEl.textContent = formatLrcTime(target);
     }
 
+    function loadLyricsFromText(rawText, titleText) {
+      pending = splitLines(rawText);
+      activePendingIdx = 0;
+      done = [];
+      selectedDone = null;
+      const cleanTitle = (titleText || "").replace(/\\s+/g, " ").trim();
+      if (cleanTitle) {
+        done.push({ seconds: 1.0, stamp: `[${formatLrcTime(1.0)}]`, text: `Título de la canción: ${cleanTitle}`, origIndex: null });
+      }
+      renderLists();
+    }
+
     function loadSongAt(idx) {
       if (idx < 0 || idx >= songs.length) return;
       currentSong = songs[idx];
       audioEl.pause();
       setCurrentTimeSec(0);
-      selectedDone = null;
 
       const title = (currentSong.title || "").trim();
-      pending = splitLines(currentSong.lyrics || "");
-      done = [];
-      if (title) {
-        done.push({ seconds: 1.0, stamp: `[${formatLrcTime(1.0)}]`, text: `Título de la canción: ${title}` });
-      }
+      loadLyricsFromText(currentSong.lyrics || "", title);
 
       const yt = (currentSong.link_youtube || "").trim();
       statusEl.textContent = `Pista ${idx + 1}/${songs.length}: ${title} | ${yt ? "YouTube: " + yt : "Sin link de YouTube"}`;
       setupAudioSource(currentSong.audio || "");
-      renderLists();
     }
 
     function setupAudioSource(rawUrl) {
@@ -164,13 +204,19 @@ HTML_PAGE = """<!DOCTYPE html>
       const dList = document.getElementById("doneList");
       document.getElementById("pendingHeader").textContent = `Pendientes (${pending.length} líneas)`;
 
+      if (pending.length === 0) {
+        activePendingIdx = 0;
+      } else if (activePendingIdx < 0 || activePendingIdx >= pending.length) {
+        activePendingIdx = 0;
+      }
+
       pList.innerHTML = "";
       pending.forEach((line, i) => {
         const div = document.createElement("div");
-        div.className = "line-item" + (i === 0 ? " active" : "");
+        div.className = "line-item" + (i === activePendingIdx ? " active" : "");
         div.textContent = line;
         div.onclick = () => {
-          pending.unshift(...pending.splice(i, 1));
+          activePendingIdx = i;
           renderLists();
         };
         pList.appendChild(div);
@@ -191,19 +237,72 @@ HTML_PAGE = """<!DOCTYPE html>
 
     function stampLine() {
       if (!pending.length) return;
-      const line = pending.shift();
+      const idx = Math.max(0, Math.min(activePendingIdx, pending.length - 1));
+      const [line] = pending.splice(idx, 1);
       const t = currentTimeSec();
-      done.push({ seconds: t, stamp: `[${formatLrcTime(t)}]`, text: line });
+      done.push({ seconds: t, stamp: `[${formatLrcTime(t)}]`, text: line, origIndex: idx });
       selectedDone = done.length - 1;
+      activePendingIdx = pending.length ? Math.min(idx, pending.length - 1) : 0;
       renderLists();
     }
 
     function undoLast() {
       if (!done.length) return;
       const last = done.pop();
-      pending.unshift(last.text);
+      if (last.origIndex !== null && last.origIndex !== undefined) {
+        const pos = Math.max(0, Math.min(last.origIndex, pending.length));
+        pending.splice(pos, 0, last.text);
+        activePendingIdx = pos;
+      } else {
+        pending.unshift(last.text);
+        activePendingIdx = 0;
+      }
       selectedDone = done.length ? done.length - 1 : null;
       renderLists();
+    }
+
+    function getFullEntryText() {
+      const doneWithPos = done.filter(r => r.origIndex !== null && r.origIndex !== undefined);
+      if (doneWithPos.length) {
+        const map = new Map();
+        doneWithPos.forEach(r => map.set(r.origIndex, r.text));
+        const total = Math.max(...Array.from(map.keys())) + 1 + pending.length;
+        const merged = [];
+        let pCursor = 0;
+        for (let i = 0; i < total; i++) {
+          if (map.has(i)) {
+            merged.push(map.get(i));
+          } else if (pCursor < pending.length) {
+            merged.push(pending[pCursor++]);
+          }
+        }
+        while (pCursor < pending.length) {
+          merged.push(pending[pCursor++]);
+        }
+        return merged.join("\\n");
+      }
+      return pending.join("\\n");
+    }
+
+    function openEditModal() {
+      editTextarea.value = getFullEntryText();
+      editModal.classList.add("open");
+      editTextarea.focus();
+    }
+
+    function closeEditModal() {
+      editModal.classList.remove("open");
+    }
+
+    function saveEditModal() {
+      const updated = editTextarea.value;
+      if (currentSong) {
+        currentSong.lyrics = updated;
+      }
+      const title = (currentSong && currentSong.title) || "";
+      loadLyricsFromText(updated, title);
+      closeEditModal();
+      statusEl.textContent = "Entrada completa actualizada.";
     }
 
     function adjustTime(delta) {
@@ -249,6 +348,10 @@ HTML_PAGE = """<!DOCTYPE html>
     }, 80);
 
     document.addEventListener("keydown", (e) => {
+      if (editModal.classList.contains("open")) {
+        if (e.key === "Escape") closeEditModal();
+        return;
+      }
       if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
       if (e.key === "Enter") { e.preventDefault(); stampLine(); }
       else if (e.key === "ArrowLeft") { e.preventDefault(); adjustTime(e.shiftKey ? -10 : -0.05); }
@@ -274,7 +377,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
 MANIFEST_JSON = json.dumps({
     "name": "Lyrics Sync Para Prem",
-    "short_name": "Lyrics Sync",
+    "short_name": "Lyrics Sync Para Prem",
     "start_url": "/",
     "display": "standalone",
     "background_color": "#141619",
