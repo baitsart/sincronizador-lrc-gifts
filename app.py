@@ -46,7 +46,18 @@ HTML_PAGE = """<!DOCTYPE html>
     select, button { padding: 8px 12px; border-radius: 6px; border: 1px solid #343a40; background: #212529; color: #fff; cursor: pointer; }
     select { flex: 1; min-width: 240px; }
     button:hover { background: #2c3238; }
-    .clock { font-family: monospace; font-size: 1.6rem; font-weight: bold; padding: 4px 12px; border: 1px solid #495057; border-radius: 6px; background: #1b1e23; }
+    .clock {
+      font-family: monospace;
+      font-size: 1.6rem;
+      font-weight: bold;
+      padding: 4px 12px;
+      min-width: 155px;
+      text-align: center;
+      box-sizing: border-box;
+      border: 1px solid #495057;
+      border-radius: 6px;
+      background: #1b1e23;
+    }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
     .box { border: 1px solid #2b3036; border-radius: 8px; padding: 10px; background: #191c20; height: 380px; overflow-y: auto; }
     .line-item { padding: 6px 8px; border-radius: 4px; cursor: pointer; margin-bottom: 4px; font-size: 0.95rem; }
@@ -70,19 +81,19 @@ HTML_PAGE = """<!DOCTYPE html>
   <div class="row">
     <label for="songSelect">Canción:</label>
     <select id="songSelect"></select>
-    <button id="btnPlay">▶ Reproducir / Pausa</button>
+    <button id="btnPlay" type="button">▶ Reproducir / Pausa</button>
     <span id="clock" class="clock">00:00.00</span>
   </div>
 
   <div class="row">
-    <button onclick="adjustTime(-0.50)">⏪ -0.50s</button>
-    <button onclick="adjustTime(-0.10)">◀ -0.10s</button>
-    <button onclick="adjustTime(+0.10)">+0.10s ▶</button>
-    <button onclick="adjustTime(+0.50)">+0.50s ⏩</button>
-    <button onclick="stampLine()">⏱ Marcar frase (Enter)</button>
-    <button onclick="undoLast()">↩ Deshacer última</button>
-    <button onclick="openEditModal()">✏️ Editar entrada</button>
-    <button onclick="downloadLrc()">💾 Descargar .lrc</button>
+    <button type="button" onclick="adjustTime(-0.50)">⏪ -0.50s</button>
+    <button type="button" onclick="adjustTime(-0.10)">◀ -0.10s</button>
+    <button type="button" onclick="adjustTime(+0.10)">+0.10s ▶</button>
+    <button type="button" onclick="adjustTime(+0.50)">+0.50s ⏩</button>
+    <button type="button" onclick="stampLine()">⏱ Marcar frase (Enter)</button>
+    <button type="button" onclick="undoLast()">↩ Deshacer última</button>
+    <button type="button" onclick="openEditModal()">✏️ Editar entrada</button>
+    <button type="button" onclick="downloadLrc()">💾 Descargar .lrc</button>
   </div>
 
   <div class="grid">
@@ -104,8 +115,8 @@ HTML_PAGE = """<!DOCTYPE html>
       <div style="font-weight:bold;">Editar letra de la entrada completa</div>
       <textarea id="editTextarea" placeholder="Una línea por frase..."></textarea>
       <div class="modal-actions">
-        <button onclick="closeEditModal()">Cancelar</button>
-        <button onclick="saveEditModal()">Guardar entrada</button>
+        <button type="button" onclick="closeEditModal()">Cancelar</button>
+        <button type="button" onclick="saveEditModal()">Guardar entrada</button>
       </div>
     </div>
   </div>
@@ -118,6 +129,8 @@ HTML_PAGE = """<!DOCTYPE html>
     let done = [];
     let selectedDone = null;
     let hls = null;
+    let manualTimeSec = 0;
+    let seekCooldownUntil = 0;
 
     const audioEl = document.getElementById("audioEl");
     const songSelect = document.getElementById("songSelect");
@@ -145,13 +158,25 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     function currentTimeSec() {
-      return Number(audioEl.currentTime) || 0;
+      if (performance.now() < seekCooldownUntil) {
+        return manualTimeSec;
+      }
+      if (!audioEl.paused && Number.isFinite(audioEl.currentTime)) {
+        manualTimeSec = Number(audioEl.currentTime) || 0;
+      }
+      return manualTimeSec;
     }
 
     function setCurrentTimeSec(val) {
       const target = Math.max(0, Number(val) || 0);
-      audioEl.currentTime = target;
+      manualTimeSec = target;
+      seekCooldownUntil = performance.now() + 350;
       clockEl.textContent = formatLrcTime(target);
+      try {
+        if (audioEl.readyState >= 1 || Number.isFinite(audioEl.duration)) {
+          audioEl.currentTime = target;
+        }
+      } catch (_err) {}
     }
 
     function loadLyricsFromText(rawText, titleText) {
@@ -170,7 +195,9 @@ HTML_PAGE = """<!DOCTYPE html>
       if (idx < 0 || idx >= songs.length) return;
       currentSong = songs[idx];
       audioEl.pause();
-      setCurrentTimeSec(0);
+      seekCooldownUntil = 0;
+      manualTimeSec = 0;
+      clockEl.textContent = formatLrcTime(0);
 
       const title = (currentSong.title || "").trim();
       loadLyricsFromText(currentSong.lyrics || "", title);
@@ -306,13 +333,14 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     function adjustTime(delta) {
+      const nextTime = Math.max(0, manualTimeSec + delta);
+      setCurrentTimeSec(nextTime);
+
       if (selectedDone !== null && done[selectedDone]) {
         const nextSec = Math.max(0, done[selectedDone].seconds + delta);
         done[selectedDone].seconds = nextSec;
         done[selectedDone].stamp = `[${formatLrcTime(nextSec)}]`;
         renderLists();
-      } else {
-        setCurrentTimeSec(currentTimeSec() + delta);
       }
     }
 
@@ -333,8 +361,16 @@ HTML_PAGE = """<!DOCTYPE html>
 
     document.getElementById("btnPlay").onclick = async () => {
       if (audioEl.paused) {
-        try { await audioEl.play(); } catch (e) { statusEl.textContent = "Error al reproducir: " + e.message; }
+        try {
+          if (manualTimeSec > 0.05 && audioEl.readyState >= 1) {
+            audioEl.currentTime = manualTimeSec;
+          }
+          await audioEl.play();
+        } catch (e) {
+          statusEl.textContent = "Error al reproducir: " + e.message;
+        }
       } else {
+        manualTimeSec = Number(audioEl.currentTime) || manualTimeSec;
         audioEl.pause();
       }
     };
@@ -342,8 +378,9 @@ HTML_PAGE = """<!DOCTYPE html>
     songSelect.onchange = () => loadSongAt(songSelect.selectedIndex);
 
     setInterval(() => {
-      if (!audioEl.paused) {
-        clockEl.textContent = formatLrcTime(currentTimeSec());
+      if (!audioEl.paused && performance.now() >= seekCooldownUntil) {
+        manualTimeSec = Number(audioEl.currentTime) || manualTimeSec;
+        clockEl.textContent = formatLrcTime(manualTimeSec);
       }
     }, 80);
 
